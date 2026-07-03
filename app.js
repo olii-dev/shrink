@@ -63,24 +63,62 @@ const setProgress = (label, pct, detail = '') => {
 };
 
 // ---- ffmpeg.wasm loader (lazy, with progress on first load) ----
+//
+// Three reliability fixes vs. the naive setup:
+//  1. `classWorkerURL` is passed as a blob URL so the worker spawns same-origin
+//     — otherwise the browser silently blocks the cross-origin CDN worker and
+//     load() hangs forever with no error.
+//  2. jsDelivr instead of unpkg (better uptime + edge caching).
+//  3. 60s timeout + explicit error handling so it can never hang silently.
+const FFMPEG_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+const CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+
+async function fetchWithTimeout(url, ms, onProgress) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function getFFmpeg(onLog) {
   if (ffmpegReady) return ffmpegInstance;
 
-  // v0.12.x UMD globals
+  if (!window.FFmpegWASM || !window.FFmpegUtil) {
+    throw new Error('ffmpeg libraries failed to load. Check your connection and refresh.');
+  }
   const { FFmpeg } = window.FFmpegWASM;
   const { toBlobURL } = window.FFmpegUtil;
 
   const ffmpeg = new FFmpeg();
   ffmpeg.on('log', ({ message }) => onLog?.(message));
 
-  // Single-threaded core — no special COOP/COEP headers required.
-  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-  setProgress('Loading compression engine…', 8, 'Downloading ffmpeg core (~30 MB, cached after first run)');
+  setProgress('Loading compression engine…', 10, 'Fetching ffmpeg core (~30 MB, cached after first run)');
 
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-  });
+  // Fetch each asset as a same-origin blob URL. This is the key fix:
+  // Workers and WASM loaded from blob: URLs are same-origin, so the browser
+  // won't block them with a silent cross-origin error.
+  const [coreURL, wasmURL, workerURL] = await Promise.all([
+    toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript'),
+    toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+    // 814.ffmpeg.js is the actual worker bundle for the UMD build
+    toBlobURL(`${FFMPEG_BASE}/814.ffmpeg.js`, 'text/javascript'),
+  ]);
+
+  setProgress('Starting engine…', 25, '');
+
+  // load() resolves when the worker reports it's ready. Give it a hard timeout
+  // so we never hang forever if something goes wrong inside the worker.
+  await Promise.race([
+    ffmpeg.load({ coreURL, wasmURL, classWorkerURL: workerURL }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Engine failed to start within 60s. Refresh and try again.')), 60000),
+    ),
+  ]);
 
   ffmpegInstance = ffmpeg;
   ffmpegReady = true;
