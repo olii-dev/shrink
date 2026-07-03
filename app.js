@@ -32,6 +32,8 @@ const fileRes = $('fileRes');
 const targetSize = $('targetSize');
 const sizePresets = $('sizePresets');
 const resolution = $('resolution');
+const customResolutionWrap = $('customResolutionWrap');
+const customResolution = $('customResolution');
 const compressBtn = $('compressBtn');
 const progress = $('progress');
 const progressLabel = $('progressLabel');
@@ -202,6 +204,25 @@ targetSize.addEventListener('input', () => {
   sizePresets.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.size === targetSize.value));
 });
 
+// Show/hide the custom resolution input when "Custom…" is selected
+resolution.addEventListener('change', () => {
+  const isCustom = resolution.value === 'custom';
+  customResolutionWrap.classList.toggle('hidden', !isCustom);
+  if (isCustom) customResolution.focus();
+});
+
+// Resolve the chosen max height, honouring the custom input.
+// Returns 0 for "keep original", or a clamped even number >= 2.
+function getResolutionHeight() {
+  if (resolution.value === 'custom') {
+    let h = parseInt(customResolution.value, 10);
+    if (!h || h < 2) h = 2;          // floor: H.264 yuv420p needs height >= 2
+    if (h > 4320) h = 4320;          // cap at 8K to keep it sane
+    return h;
+  }
+  return parseInt(resolution.value, 10);
+}
+
 // =========================================================================
 //  CORE: compress via ffmpeg.wasm two-pass encoding
 // =========================================================================
@@ -213,7 +234,7 @@ async function compress() {
     alert('Enter a valid target size.');
     return;
   }
-  const maxH = parseInt(resolution.value, 10);
+  const maxH = getResolutionHeight();
 
   // Fast path: already under target
   if (currentFile.size <= targetMB * 1024 * 1024) {

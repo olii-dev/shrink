@@ -109,11 +109,22 @@ async function main() {
   // Optional: override target size + resolution via env vars (for testing joke modes)
   const targetSize = process.env.TARGET_MB;
   const resolution = process.env.RESOLUTION_H;
+  const customRes = process.env.CUSTOM_RESOLUTION_H;
   if (targetSize) {
     await eval_(`document.getElementById('targetSize').value = '${targetSize}'`, false);
     console.log('Set target size:', targetSize, 'MB');
   }
-  if (resolution) {
+  if (customRes) {
+    // Select "Custom…" then set the number input + dispatch change
+    await eval_(`
+      const sel = document.getElementById('resolution');
+      sel.value = 'custom';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      const inp = document.getElementById('customResolution');
+      inp.value = '${customRes}';
+    `, false);
+    console.log('Set custom resolution height:', customRes, 'p');
+  } else if (resolution) {
     await eval_(`document.getElementById('resolution').value = '${resolution}'`, false);
     console.log('Set resolution height:', resolution, 'p');
   }

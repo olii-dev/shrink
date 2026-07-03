@@ -66,8 +66,13 @@
             <option value="360">360p</option>
             <option value="12">12p 😏</option>
             <option value="2">2p 💀 (the absolute floor)</option>
+            <option value="custom">Custom…</option>
           </select>
-          <p class="hint">Lower resolution = much smaller files when the target is tight.</p>
+          <div id="customResolutionWrap" class="custom-resolution hidden">
+            <input id="customResolution" type="number" min="2" max="4320" value="144" />
+            <span class="unit">p tall</span>
+          </div>
+          <p class="hint">Lower resolution = much smaller files when the target is tight. Min 2p — H.264 can't go lower.</p>
         </div>
 
         <button id="compressBtn" class="compress-btn" type="button">Compress video</button>

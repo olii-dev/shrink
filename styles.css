@@ -253,6 +253,41 @@ html, body {
 
 #resolution:focus-visible { border-color: var(--accent); }
 
+.custom-resolution {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  transition: border-color 0.15s;
+  animation: slideDown 0.18s ease;
+}
+
+.custom-resolution:focus-within { border-color: var(--accent); }
+
+.custom-resolution input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  padding: 10px 0;
+  width: 100%;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.custom-resolution input::-webkit-outer-spin-button,
+.custom-resolution input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .hint {
   margin: 0;
   font-size: 12px;
