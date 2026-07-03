@@ -105,12 +105,14 @@
     </section>
 
     <footer class="footer">
-      <p class="footer-note">First run downloads ~30 MB of ffmpeg core (cached afterwards). Processing speed depends on your CPU.</p>
+      <p class="footer-note">Runs on your device using the native WebCodecs API. No uploads, no engine download.</p>
     </footer>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+  <!-- Demuxer: mp4box (parses input MP4 into coded frames) → window.MP4Box -->
+  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.3/dist/mp4box.all.min.js"></script>
+  <!-- Muxer: mp4-muxer (writes encoded frames back into an MP4) → window.Mp4Muxer -->
+  <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
