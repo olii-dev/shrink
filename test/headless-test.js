@@ -106,6 +106,18 @@ async function main() {
   const durText = await eval_(`document.getElementById('fileDuration').textContent`, false);
   console.log('Detected duration:', durText);
 
+  // Optional: override target size + resolution via env vars (for testing joke modes)
+  const targetSize = process.env.TARGET_MB;
+  const resolution = process.env.RESOLUTION_H;
+  if (targetSize) {
+    await eval_(`document.getElementById('targetSize').value = '${targetSize}'`, false);
+    console.log('Set target size:', targetSize, 'MB');
+  }
+  if (resolution) {
+    await eval_(`document.getElementById('resolution').value = '${resolution}'`, false);
+    console.log('Set resolution height:', resolution, 'p');
+  }
+
   // Click compress
   await eval_(`document.getElementById('compressBtn').click()`, false);
   console.log('Clicked compress. Polling...');
