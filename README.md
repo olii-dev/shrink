@@ -72,7 +72,7 @@ lib/          — ffmpeg.wasm engine (bundled, ~32 MB)
 ## Notes
 
 - **First run in a session** still takes a moment to instantiate ffmpeg (parsing the WASM), but no network fetch happens — it's already on disk.
-- Uses the **single-threaded** ffmpeg core, so it works on any static host without COOP/COEP headers. A ~100 MB clip typically takes 1–3 minutes depending on your CPU.
+- Uses the **single-threaded** ffmpeg core (works on any static host without COOP/COEP headers), but with the `-preset veryfast` x264 setting for ~3× faster encoding than the default. A ~100 MB clip typically takes 30–90 seconds depending on your CPU.
 - If the target is impossibly small for the duration (e.g. 1 MB for a 10-minute video), quality degrades gracefully — the encoder clamps to a minimum 40 kbps.
 
 ## Deploy

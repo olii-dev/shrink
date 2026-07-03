@@ -266,7 +266,7 @@ async function compress() {
     setProgress('Reading file…', 8, '');
     await ffmpeg.writeFile(inName, await window.FFmpegUtil.fetchFile(currentFile));
 
-    // ---- Common args: H.264 video + AAC audio (PRESERVED), MP4 output ----
+    // ---- Common args: H.264 video + AAC audio (preserved), MP4 output ----
     const filters = [];
     if (maxH > 0 && currentMeta?.height && currentMeta.height > maxH) {
       filters.push(`scale=-2:${maxH}`); // -2 keeps even dimensions
@@ -275,14 +275,34 @@ async function compress() {
     const commonArgs = [
       '-i', inName,
       '-c:v', 'libx264',
-      '-preset', 'medium',
+      '-preset', 'veryfast', // ~3x faster than 'medium', negligible quality drop at bitrate-constrained targets
       '-pix_fmt', 'yuv420p',
       ...(filters.length ? ['-vf', filters.join(',')] : []),
-      '-c:a', 'aac',       // ← AUDIO PRESERVED, re-encoded to AAC
+      '-c:a', 'aac',       // ← audio preserved, re-encoded to AAC
       '-b:a', audioBitrate,
       '-movflags', '+faststart',
       '-y',
     ];
+
+    // ---- Friendly progress detail parser ----
+    // ffmpeg's raw log lines look like 'frame= 238 fps= 16 q=31.0 size=N/A ...'.
+    // We pull out the bits a user actually cares about and format them nicely.
+    const parseLog = (raw) => {
+      if (!raw) return '';
+      const get = (key) => {
+        const m = new RegExp(`${key}=\\s*([0-9.]+)`).exec(raw);
+        return m ? m[1] : null;
+      };
+      const fps = get('fps');
+      const speed = get('speed');
+      if (fps && speed) {
+        const speedNum = parseFloat(speed);
+        // ffmpeg reports speed as e.g. "0.214x" or "1x"
+        const realtime = speedNum >= 1 ? 'faster than realtime' : `${(1 / speedNum).toFixed(1)}× slower than realtime`;
+        return `${fps} fps · ${realtime}`;
+      }
+      return '';
+    };
 
     // ---- Progress plumbing for two passes ----
     // Pass 1 (analysis) is fast → weight 0..22%. Pass 2 (encode) → 22..98%.
@@ -290,9 +310,9 @@ async function compress() {
     const makeHandler = (start, weight) => ({ progress }) => {
       const p = Math.max(0, Math.min(1, progress));
       setProgress(
-        start === 0 ? 'Analyzing (pass 1 of 2)…' : 'Encoding (pass 2 of 2)…',
+        start === 0 ? 'Analysing (pass 1 of 2)…' : 'Encoding (pass 2 of 2)…',
         (start + p * weight) * 100,
-        lastLog,
+        parseLog(lastLog),
       );
     };
 
