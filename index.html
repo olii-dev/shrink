@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shrink — Video Compressor</title>
+  <meta name="description" content="Compress videos to a target size, right in your browser. Nothing is uploaded." />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <div class="logo">
+        <span class="logo-mark" aria-hidden="true">🎬</span>
+        <h1>Shrink</h1>
+      </div>
+      <p class="tagline">Compress any video to a target size — 100% in your browser, nothing uploaded.</p>
+    </header>
+
+    <!-- STEP 1: pick a file -->
+    <section id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a video file">
+      <input id="fileInput" type="file" accept="video/*" hidden />
+      <div class="dropzone-inner">
+        <div class="drop-icon" aria-hidden="true">⬆️</div>
+        <p class="drop-title">Drop a video here</p>
+        <p class="drop-sub">or <span class="link">browse files</span> · MP4, MOV, WebM, MKV…</p>
+      </div>
+    </section>
+
+    <!-- STEP 2: configure + compress -->
+    <section id="config" class="config hidden" aria-live="polite">
+      <div class="preview">
+        <video id="previewVideo" muted playsinline controls></video>
+        <div class="preview-meta">
+          <div><span class="label">File</span><span id="fileName" class="value">—</span></div>
+          <div><span class="label">Size</span><span id="fileSize" class="value">—</span></div>
+          <div><span class="label">Duration</span><span id="fileDuration" class="value">—</span></div>
+          <div><span class="label">Resolution</span><span id="fileRes" class="value">—</span></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="control-group">
+          <label for="targetSize">Target size</label>
+          <div class="size-input">
+            <input id="targetSize" type="number" min="1" max="500" value="15" />
+            <span class="unit">MB</span>
+          </div>
+          <div class="presets" id="sizePresets">
+            <button type="button" data-size="8">8 MB</button>
+            <button type="button" data-size="10">10 MB</button>
+            <button type="button" data-size="15" class="active">15 MB</button>
+            <button type="button" data-size="25">25 MB</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label for="resolution">Max resolution</label>
+          <select id="resolution">
+            <option value="0">Keep original</option>
+            <option value="1080">1080p</option>
+            <option value="720" selected>720p</option>
+            <option value="480">480p</option>
+            <option value="360">360p</option>
+          </select>
+          <p class="hint">Lower resolution = much smaller files when the target is tight.</p>
+        </div>
+
+        <button id="compressBtn" class="compress-btn" type="button">Compress video</button>
+      </div>
+    </section>
+
+    <!-- STEP 3: progress + result -->
+    <section id="progress" class="progress hidden" aria-live="polite">
+      <div class="progress-head">
+        <span id="progressLabel">Preparing…</span>
+        <span id="progressPct">0%</span>
+      </div>
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+      <p id="progressDetail" class="progress-detail"></p>
+    </section>
+
+    <section id="result" class="result hidden">
+      <h2>Done! 🎉</h2>
+      <div class="result-grid">
+        <div class="stat">
+          <span class="stat-label">Before</span>
+          <span id="beforeSize" class="stat-value">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">After</span>
+          <span id="afterSize" class="stat-value">—</span>
+        </div>
+        <div class="stat highlight">
+          <span class="stat-label">Saved</span>
+          <span id="savedPct" class="stat-value">—</span>
+        </div>
+      </div>
+      <video id="resultVideo" controls playsinline></video>
+      <div class="result-actions">
+        <button id="downloadBtn" class="download-btn" type="button">⬇ Download MP4</button>
+        <button id="resetBtn" class="reset-btn" type="button">Compress another</button>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p class="footer-note">First run downloads ~30 MB of ffmpeg core (cached afterwards). Processing speed depends on your CPU.</p>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
