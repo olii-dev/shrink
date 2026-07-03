@@ -1,0 +1,3 @@
+# Treat the ffmpeg WASM binary as a binary file (no diff/merge noise)
+lib/*.wasm binary
+lib/*.js binary

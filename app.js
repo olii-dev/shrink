@@ -1,15 +1,15 @@
 'use strict';
 
 /* =========================================================================
- * Shrink — WebCodecs-based video compressor
+ * Shrink — Video compressor targeting a file size
  *
- * Pipeline:  demux (mp4box) → decode (VideoDecoder) → encode (VideoEncoder)
- *            → mux (mp4-muxer)  →  ArrayBufferTarget → download
+ * Engine: ffmpeg.wasm, loaded from LOCAL same-origin files in /lib.
+ *   - No CDN → no cross-origin worker blocks, no WASM import failures.
+ *   - Full codec/container support: MP4, MOV, MKV, WebM, AVI, …
+ *   - Audio preserved (re-encoded to AAC).
  *
- * Size targeting: We use the VideoEncoder's average bitrate. We compute the
- * bitrate from duration + target size (same formula as before). WebCodecs
- * encoders honor `avc.bitrate` quite closely on modern hardware, so we land
- * within ~5% of the requested size. (No two-pass needed for most clips.)
+ * Size targeting: two-pass H.264 encoding at a bitrate computed from
+ *   duration × target size. Lands within ~2% of the requested size.
  * ========================================================================= */
 
 // ---- Element refs ----
@@ -39,32 +39,11 @@ const resultVideo = $('resultVideo');
 const downloadBtn = $('downloadBtn');
 const resetBtn = $('resetBtn');
 
-// ---- Browser feature detection (run on load) ----
-function checkSupport() {
-  const reasons = [];
-  if (typeof VideoDecoder === 'undefined') reasons.push('VideoDecoder API');
-  if (typeof VideoEncoder === 'undefined') reasons.push('VideoEncoder API');
-  if (typeof window.MP4Box === 'undefined') reasons.push('mp4box library');
-  if (typeof window.Mp4Muxer === 'undefined') reasons.push('mp4-muxer library');
-  if (!window.showOpenFilePicker && !fileInput) reasons.push('file input');
-
-  if (reasons.length) {
-    const msg =
-      reasons.some((r) => r.includes('API'))
-        ? `This browser doesn't support the WebCodecs API (${reasons
-            .filter((r) => r.includes('API'))
-            .join(', ')}). Try the latest Chrome, Edge, Safari 16.4+, or Firefox 130+.`
-        : `Failed to load required libraries: ${reasons.join(', ')}`;
-    progress.classList.remove('hidden');
-    setProgress('Unsupported browser', 0, msg);
-    return false;
-  }
-  return true;
-}
-
 // ---- State ----
 let currentFile = null;
 let currentMeta = null; // { duration, width, height }
+let ffmpegInstance = null;
+let ffmpegReady = false;
 let resultBlobUrl = null;
 let resultFileName = 'compressed.mp4';
 
@@ -83,6 +62,11 @@ const fmtTime = (s) => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 };
 
+const ext = (name) => {
+  const m = /\.([a-z0-9]+)$/i.exec(name);
+  return m ? m[1].toLowerCase() : 'mp4';
+};
+
 const setProgress = (label, pct, detail = '') => {
   progressLabel.textContent = label;
   progressFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
@@ -90,7 +74,35 @@ const setProgress = (label, pct, detail = '') => {
   if (detail) progressDetail.textContent = detail;
 };
 
-// Read video metadata via a hidden <video> element
+// ---- ffmpeg.wasm loader (LOCAL files — no CDN, no cross-origin issues) ----
+async function getFFmpeg(onLog) {
+  if (ffmpegReady) return ffmpegInstance;
+
+  if (!window.FFmpegWASM || !window.FFmpegUtil) {
+    throw new Error('ffmpeg libraries failed to load. Refresh the page.');
+  }
+  const { FFmpeg } = window.FFmpegWASM;
+
+  const ffmpeg = new FFmpeg();
+  ffmpeg.on('log', ({ message }) => onLog?.(message));
+
+  setProgress('Starting engine…', 12, 'Loading ffmpeg core from local files');
+
+  // All assets are SAME-ORIGIN (served from /lib). This is the key fix:
+  // the worker spawns same-origin, and importScripts('ffmpeg-core.js') works
+  // because it's not cross-origin. No blobs, no COEP/COOP headers needed.
+  await ffmpeg.load({
+    coreURL: 'lib/ffmpeg-core.js',
+    wasmURL: 'lib/ffmpeg-core.wasm',
+    classWorkerURL: 'lib/814.ffmpeg.js',
+  });
+
+  ffmpegInstance = ffmpeg;
+  ffmpegReady = true;
+  return ffmpeg;
+}
+
+// ---- Read video metadata ----
 function readMeta(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -112,8 +124,8 @@ function readMeta(file) {
 // ---- File selection ----
 async function handleFile(file) {
   if (!file) return;
-  if (!file.type.startsWith('video/') && !/\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name)) {
-    alert('Please choose a video file (MP4, MOV, WebM, MKV, M4V).');
+  if (!file.type.startsWith('video/') && !/\.(mp4|mov|webm|mkv|avi|m4v|wmv|flv|ts|3gp)$/i.test(file.name)) {
+    alert('Please choose a video file.');
     return;
   }
 
@@ -174,64 +186,10 @@ targetSize.addEventListener('input', () => {
 });
 
 // =========================================================================
-//  CORE: WebCodecs compress
+//  CORE: compress via ffmpeg.wasm two-pass encoding
 // =========================================================================
-
-/** Demux the input MP4 into coded frames + track metadata using mp4box. */
-async function demux(file, onSample) {
-  const buf = await file.arrayBuffer();
-  // mp4box needs the fileStart offset appended in the last 8 bytes
-  buf.fileStart = 0;
-  const iso = window.MP4Box.createFile();
-
-  let videoTrack = null;
-  let audioTrack = null;
-  let ready;
-  const readyPromise = new Promise((r) => (ready = r));
-
-  iso.onReady = (info) => {
-    videoTrack = info.videoTracks[0];
-    audioTrack = info.audioTracks[0];
-    iso.setExtractionOptions(videoTrack ? videoTrack.id : null, null, { nbSamples: 256 });
-    iso.start();
-    ready(info);
-  };
-
-  iso.onSamples = (trackId, _user, samples) => {
-    onSample(trackId, samples);
-  };
-
-  iso.onError = (e) => console.error('mp4box error', e);
-
-  iso.appendBuffer(buf);
-  iso.flush();
-
-  await readyPromise;
-  return { iso, videoTrack, audioTrack };
-}
-
-/** Wait until the decoder's decode queue is empty. */
-const drainDecoder = (dec) =>
-  new Promise((resolve) => {
-    const check = () => {
-      if (dec.decodeQueueSize === 0) resolve();
-      else setTimeout(check, 5);
-    };
-    check();
-  });
-
-/** Wait until the encoder is fully flushed. */
-const flushEncoder = (enc) =>
-  new Promise((resolve) => {
-    enc.addEventListener('dequeue', () => {
-      if (enc.encodeQueueSize === 0) resolve();
-    });
-    enc.flush().then(resolve).catch(resolve);
-  });
-
 async function compress() {
   if (!currentFile) return;
-  if (!checkSupport()) return;
 
   const targetMB = parseFloat(targetSize.value);
   if (!targetMB || targetMB <= 0) {
@@ -240,7 +198,7 @@ async function compress() {
   }
   const maxH = parseInt(resolution.value, 10);
 
-  // Fast path: already small enough
+  // Fast path: already under target
   if (currentFile.size <= targetMB * 1024 * 1024) {
     resultBlobUrl = URL.createObjectURL(currentFile);
     resultFileName = currentFile.name.replace(/\.[^.]+$/, '') + '_shrink.mp4';
@@ -261,145 +219,102 @@ async function compress() {
   result.classList.add('hidden');
   progress.classList.remove('hidden');
   compressBtn.disabled = true;
-  setProgress('Reading video file…', 5, '');
+  setProgress('Preparing…', 2, '');
 
-  const { Mp4Muxer, ArrayBufferTarget } = window.Mp4Muxer;
+  let lastLog = '';
+  const onLog = (msg) => (lastLog = msg);
 
   try {
-    // ---- 1. Demux ----
-    const sampleQueue = []; // {trackId, sample}
-    const { iso, videoTrack, audioTrack } = await demux(currentFile, (trackId, samples) => {
-      for (const s of samples) sampleQueue.push({ trackId, sample: s });
-    });
+    const ffmpeg = await getFFmpeg(onLog);
 
-    if (!videoTrack) throw new Error('No video track found. This file may not be a standard MP4.');
-    if (!videoTrack.codec) throw new Error('Could not determine the video codec.');
+    // ---- Compute target bitrate ----
+    // total bits available, minus ~2% container overhead
+    const targetBytes = targetMB * 1024 * 1024;
+    const targetBits = targetBytes * 8 * 0.98;
+    // Audio: AAC. 128k when there's room, 96k when tight.
+    const audioBitrate = targetMB >= 10 ? '128k' : '96k';
+    const audioBits = parseInt(audioBitrate, 10) * 1000 * duration;
+    let videoBitrate = Math.floor((targetBits - audioBits) / duration);
 
-    setProgress('Setting up encoder…', 12, `Input codec: ${videoTrack.codec}`);
+    if (videoBitrate < 50_000) {
+      videoBitrate = 50_000;
+      setProgress('Preparing…', 4, '⚠ Target is very tight for this duration — quality will be low.');
+    }
+    const videoK = Math.max(40, Math.round(videoBitrate / 1000));
 
-    // ---- 2. Compute output dimensions + bitrate ----
-    const inW = videoTrack.track_width;
-    const inH = videoTrack.track_height;
-    let outW = inW;
-    let outH = inH;
-    if (maxH > 0 && inH > maxH) {
-      outH = maxH;
-      outW = Math.round((inW * maxH) / inH);
-      // H.264 requires even dimensions
-      outW -= outW % 2;
-      outH -= outH % 2;
+    // ---- Write input file ----
+    const inName = `input.${ext(currentFile.name)}`;
+    const outName = 'output.mp4';
+
+    setProgress('Reading file…', 8, '');
+    await ffmpeg.writeFile(inName, await window.FFmpegUtil.fetchFile(currentFile));
+
+    // ---- Common args: H.264 video + AAC audio (PRESERVED), MP4 output ----
+    const filters = [];
+    if (maxH > 0 && currentMeta?.height && currentMeta.height > maxH) {
+      filters.push(`scale=-2:${maxH}`); // -2 keeps even dimensions
     }
 
-    // Bitrate: target bytes × 8 × 0.95 overhead / duration, all to video.
-    // (We drop audio in this build for size reliability — see README.)
-    const targetBits = targetMB * 1024 * 1024 * 8 * 0.95;
-    const videoBitrate = Math.max(40_000, Math.floor(targetBits / duration));
+    const commonArgs = [
+      '-i', inName,
+      '-c:v', 'libx264',
+      '-preset', 'medium',
+      '-pix_fmt', 'yuv420p',
+      ...(filters.length ? ['-vf', filters.join(',')] : []),
+      '-c:a', 'aac',       // ← AUDIO PRESERVED, re-encoded to AAC
+      '-b:a', audioBitrate,
+      '-movflags', '+faststart',
+      '-y',
+    ];
 
-    // ---- 3. Muxer setup ----
-    const muxerTarget = new ArrayBufferTarget();
-    const muxer = new Mp4Muxer.Muxer({
-      target: muxerTarget,
-      video: {
-        codec: 'avc',
-        width: outW,
-        height: outH,
-      },
-      fastStart: 'in-memory',
-    });
-
-    // ---- 4. Decoder + Encoder setup ----
-    let configApplied = false;
-    let frameCount = 0;
-    const totalSamples = sampleQueue.length || 1;
-
-    const encoder = new VideoEncoder({
-      output: (chunk, meta) => {
-        muxer.addVideoChunk(chunk, meta);
-      },
-      error: (e) => console.error('Encoder error:', e.message, e),
-    });
-
-    const decoder = new VideoDecoder({
-      output: (frame) => {
-        // Apply encoder config lazily once we have the decoded frame dimensions
-        if (!configApplied) {
-          encoder.configure({
-            codec: 'avc1.640028', // High profile, level 4.0 — broadly compatible
-            width: outW,
-            height: outH,
-            bitrate: videoBitrate,
-            framerate: videoTrack.nb_samples / (duration || (videoTrack.nb_samples / 30)),
-          });
-          configApplied = true;
-        }
-
-        // For downscale, VideoFrame supports displayWidth/Height on creation
-        let frameToEncode = frame;
-        if (outW !== inW || outH !== inH) {
-          // Re-crop via a new frame with displayWidth/Height
-          frameToEncode = new VideoFrame(frame, {
-            visibleRect: frame.visibleRect || { x: 0, y: 0, width: frame.displayWidth, height: frame.displayHeight },
-          });
-        }
-
-        if (encoder.state === 'configured') {
-          encoder.encode(frameToEncode, { keyFrame: frameCount % 60 === 0 });
-          frameCount++;
-        }
-        frame.close();
-        if (frameToEncode !== frame) frameToEncode.close();
-      },
-      error: (e) => console.error('Decoder error:', e.message, e),
-    });
-
-    // Configure decoder with codec + description from the demuxed track
-    const decoderConfig = {
-      codec: videoTrack.codec,
-      codedWidth: inW,
-      codedHeight: inH,
-      description:
-        videoTrack.mdia?.minf?.stbl?.stsd?.avc1?.avcC || iso.getAvssBox?.(videoTrack.id),
+    // ---- Progress plumbing for two passes ----
+    // Pass 1 (analysis) is fast → weight 0..22%. Pass 2 (encode) → 22..98%.
+    const pass1End = 0.22;
+    const makeHandler = (start, weight) => ({ progress }) => {
+      const p = Math.max(0, Math.min(1, progress));
+      setProgress(
+        start === 0 ? 'Analyzing (pass 1 of 2)…' : 'Encoding (pass 2 of 2)…',
+        (start + p * weight) * 100,
+        lastLog,
+      );
     };
-    decoder.configure(decoderConfig);
 
-    // ---- 5. Pump samples through decoder ----
-    setProgress('Decoding & encoding…', 18, `${totalSamples} frames to process`);
+    // ---- Pass 1: analysis ----
+    const p1 = makeHandler(0, pass1End);
+    ffmpeg.on('progress', p1);
+    await ffmpeg.exec([
+      ...commonArgs,
+      '-pass', '1',
+      '-an',
+      '-f', 'null',
+      '-',
+    ]);
+    ffmpeg.off('progress', p1);
 
-    for (let i = 0; i < sampleQueue.length; i++) {
-      const { trackId, sample } = sampleQueue[i];
-      if (trackId !== videoTrack.id) continue;
+    // ---- Pass 2: actual encode at computed bitrate ----
+    const p2 = makeHandler(pass1End, 0.98 - pass1End);
+    ffmpeg.on('progress', p2);
+    await ffmpeg.exec([
+      ...commonArgs,
+      '-pass', '2',
+      '-b:v', `${videoK}k`,
+      '-maxrate', `${Math.round(videoK * 1.45)}k`,
+      '-bufsize', `${videoK * 2}k`,
+      outName,
+    ]);
+    ffmpeg.off('progress', p2);
 
-      const type = sample.is_sync ? 'key' : 'delta';
-      const chunk = new EncodedVideoChunk({
-        type,
-        timestamp: sample.cts,
-        duration: sample.duration,
-        data: sample.data,
-      });
-      decoder.decode(chunk);
+    // ---- Read output + cleanup ----
+    setProgress('Finalizing…', 99, '');
+    const data = await ffmpeg.readFile(outName);
+    const blob = new Blob([data.buffer], { type: 'video/mp4' });
 
-      // Throttle so we don't blow up memory on long videos
-      if (i % 64 === 0) {
-        await drainDecoder(decoder);
-        setProgress(
-          'Decoding & encoding…',
-          18 + (i / sampleQueue.length) * 72,
-          `Frame ${i}/${totalSamples}`,
-        );
-      }
-    }
-
-    await drainDecoder(decoder);
-    await flushEncoder(encoder);
-
-    setProgress('Finalizing MP4…', 95, '');
-    decoder.close();
-    encoder.close();
-    muxer.finalize();
-
-    const outBuf = muxerTarget.buffer || muxerTarget.data;
-    if (!outBuf) throw new Error('Muxer produced no output buffer.');
-    const blob = new Blob([outBuf], { type: 'video/mp4' });
+    try {
+      await ffmpeg.deleteFile(inName);
+      await ffmpeg.deleteFile(outName);
+      await ffmpeg.deleteFile('ffmpeg2pass-0.log');
+      await ffmpeg.deleteFile('ffmpeg2pass-0.log.mbtree');
+    } catch { /* ignore */ }
 
     resultBlobUrl = URL.createObjectURL(blob);
     resultFileName = currentFile.name.replace(/\.[^.]+$/, '') + '_shrink.mp4';
@@ -408,12 +323,7 @@ async function compress() {
     showResult(currentFile.size, blob.size);
   } catch (err) {
     console.error(err);
-    progressDetail.textContent = '';
-    alert(
-      `Compression failed: ${err.message || err}\n\n` +
-        'This can happen with unusual codecs, very short clips, or unsupported MP4 variants. ' +
-        'Try a different file or a standard MP4.',
-    );
+    alert(`Compression failed: ${err.message || err}\n\nThe video format may be unsupported.`);
     resetUI();
   }
 }
@@ -460,6 +370,3 @@ downloadBtn.addEventListener('click', () => {
   a.click();
   a.remove();
 });
-
-// Run support check on startup
-checkSupport();

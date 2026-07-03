@@ -1,22 +1,23 @@
 # Shrink 🎬 — Browser Video Compressor
 
-Compress any video to a target file size (default **15 MB**) — **100% in your browser, nothing is uploaded.**
+Compress any video to a target file size (default **15 MB**) — **100% in your browser, nothing is uploaded.** Audio is preserved.
 
-Built with the native **WebCodecs API** (`VideoDecoder` + `VideoEncoder`) for hardware-accelerated, no-download compression. No WASM engine, no 30 MB download, no backend.
+Built with [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), **bundled locally** in the repo so there's no CDN download on use and no cross-origin worker issues.
 
-## Browser support
+## Features
 
-Requires the WebCodecs API — available in:
-- ✅ Chrome / Edge 94+
-- ✅ Safari 16.4+
-- ✅ Firefox 130+
-- ✅ Most modern mobile browsers
-
-The app shows a friendly message if your browser is too old.
+- 🎯 Adjustable target size with presets (8 / 10 / **15** / 25 MB) and free input
+- 📐 Optional resolution cap (1080p / 720p / 480p / 360p) for tight targets
+- 🔊 **Audio preserved** (re-encoded to AAC)
+- 🎞 **Broad format support** — MP4, MOV, MKV, WebM, AVI, M4V, and more
+- ⚡ Fast-path: skips recompression if input is already under target
+- 📊 Before/after size + % saved
+- 🔒 100% client-side — your video never leaves your device
+- 🚀 **Engine bundled** in `/lib` — no runtime CDN fetch, fully self-contained
 
 ## Run it
 
-Just serve the folder over HTTP (any static server works):
+Serve the folder over HTTP (ffmpeg.wasm uses `fetch()`, which browsers block on `file://`):
 
 ```bash
 cd /path/to/compressor
@@ -32,68 +33,48 @@ Open **http://localhost:8000**.
 
 ## How it works
 
-The pipeline runs entirely in the browser using native browser APIs:
+To hit a specific target size accurately, Shrink uses **two-pass H.264 encoding**:
 
-```
-input.mp4
-   │
-   ▼  mp4box.js (demux)
-   ├── coded video frames (H.264, HEVC, AV1…)
-   │     │
-   │     ▼  VideoDecoder (native)
-   │     raw VideoFrames
-   │       │
-   │       ▼  VideoEncoder (native, H.264 High@4.0)
-   │       re-encoded chunks at computed bitrate
-   │         │
-   │         ▼  mp4-muxer (mux)
-   └───────► output.mp4 ≤ target size
-```
+1. Read video duration + dimensions from a hidden `<video>` element.
+2. Compute the video bitrate that produces the target size:
+   ```
+   videoBitrate = (targetBytes × 8 × 0.98 − audioBitrate × duration) ÷ duration
+   ```
+3. **Pass 1** — fast analysis pass (no output written).
+4. **Pass 2** — encode at the computed bitrate, with VBV buffering to stay near target.
+5. Output: universal **MP4 (H.264 video + AAC audio)** with `+faststart`.
 
-### Size targeting
+Lands within **~2% of the requested size**.
 
-Bitrate is computed from duration + target size:
+## Why bundled locally?
 
-```
-videoBitrate = (targetBytes × 8 × 0.95) ÷ duration
-```
+Earlier versions loaded ffmpeg from a CDN. This was unreliable:
+- Cross-origin Web Workers are silently blocked by browsers → infinite hangs.
+- WASM modules can't be `import`'d cross-origin → "failed to import ffmpeg-core.js" errors.
 
-(0.95 leaves headroom for MP4 container overhead.)
-
-WebCodecs encoders honor `avc.bitrate` closely, so output typically lands within **~5% of the requested size**.
-
-## Features
-
-- 🎯 Adjustable target size with presets (8 / 10 / **15** / 25 MB) and free input
-- 📐 Optional resolution cap (1080p / 720p / 480p / 360p)
-- ⚡ Fast-path: skips recompression if input is already under target
-- 🚀 Hardware-accelerated — no WASM, no engine download
-- 📊 Before/after size + % saved
-- 🔒 100% client-side — your video never leaves your device
-- 📱 Responsive, works on mobile
-
-## Limitations
-
-- **Input must be a standard MP4** (most cameras, phones, screen recorders produce this). WebM/MOV/MKV support depends on browser codec availability — MP4 is the most reliable.
-- **Audio is dropped** in this build for size predictability. Re-adding audio is a planned enhancement (see TODO in `app.js`).
-- **Quality vs size**: if the target is very tight for a long video, quality will degrade gracefully (the encoder clamps to a minimum 40 kbps).
-- The first keyframe interval is set to every 60 frames — adjustable in `app.js`.
+Bundling the ffmpeg files in `/lib` makes everything **same-origin**. The worker spawns cleanly, `importScripts()` works, no special headers needed. The trade-off is a one-time ~32 MB addition to the repo.
 
 ## Files
 
 ```
-index.html   — UI structure + library script tags
-styles.css   — styling (dark theme)
-app.js       — WebCodecs demux/decode/encode/mux pipeline
+index.html    — UI structure
+styles.css    — styling (dark theme)
+app.js        — ffmpeg loading + two-pass compression logic
+lib/          — ffmpeg.wasm engine (bundled, ~32 MB)
+  ffmpeg.js         — ffmpeg main library (UMD)
+  814.ffmpeg.js     — ffmpeg worker bundle
+  ffmpeg-core.js    — ffmpeg core (WASM loader)
+  ffmpeg-core.wasm  — ffmpeg compiled to WebAssembly (~32 MB)
+  util.js           — ffmpeg utility helpers
+.gitattributes — marks /lib as binary for clean git history
 ```
 
-## Libraries
+## Notes
 
-- [mp4box.js](https://github.com/gpac/mp4box.js) v0.5.3 — MP4 demuxer (gpac)
-- [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) v5.2.2 — MP4 muxer with WebCodecs support
-
-Both are loaded from jsDelivr CDN. No build step.
+- **First run in a session** still takes a moment to instantiate ffmpeg (parsing the WASM), but no network fetch happens — it's already on disk.
+- Uses the **single-threaded** ffmpeg core, so it works on any static host without COOP/COEP headers. A ~100 MB clip typically takes 1–3 minutes depending on your CPU.
+- If the target is impossibly small for the duration (e.g. 1 MB for a 10-minute video), quality degrades gracefully — the encoder clamps to a minimum 40 kbps.
 
 ## Deploy
 
-Fully static — drop the three files on any host (GitHub Pages, Netlify, Vercel, S3, USB stick served over HTTP). No environment variables or build configuration needed.
+Fully static — push to GitHub Pages, Netlify, Vercel, S3, or any static host. The repo is self-contained; no build step or environment variables required.

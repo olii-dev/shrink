@@ -105,14 +105,14 @@
     </section>
 
     <footer class="footer">
-      <p class="footer-note">Runs on your device using the native WebCodecs API. No uploads, no engine download.</p>
+      <p>Runs entirely on your device via <a href="https://github.com/ffmpegwasm/ffmpeg.wasm" target="_blank" rel="noopener">ffmpeg.wasm</a>. Your video never leaves your browser.</p>
+      <p class="footer-note">Audio preserved · MOV/MP4/MKV/WebM supported · Engine bundled with the app (no CDN download on use).</p>
     </footer>
   </main>
 
-  <!-- Demuxer: mp4box (parses input MP4 into coded frames) → window.MP4Box -->
-  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.3/dist/mp4box.all.min.js"></script>
-  <!-- Muxer: mp4-muxer (writes encoded frames back into an MP4) → window.Mp4Muxer -->
-  <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.js"></script>
+  <!-- ffmpeg.wasm: loaded from LOCAL same-origin files to avoid cross-origin worker issues -->
+  <script src="lib/ffmpeg.js"></script>
+  <script src="lib/util.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
