@@ -1,0 +1,8 @@
+# Test artifacts (large video files)
+test-input.mp4
+test-output.mp4
+test/*.mp4
+
+# Node
+node_modules/
+package-lock.json

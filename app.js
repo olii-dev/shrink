@@ -12,6 +12,13 @@
  *   duration × target size. Lands within ~2% of the requested size.
  * ========================================================================= */
 
+// Capture alerts for testing (so headless tests can read error messages)
+const _origAlert = window.alert;
+window.alert = (msg) => {
+  window.__lastAlert = msg;
+  _origAlert.call(window, msg);
+};
+
 // ---- Element refs ----
 const $ = (id) => document.getElementById(id);
 const dropzone = $('dropzone');
@@ -75,6 +82,13 @@ const setProgress = (label, pct, detail = '') => {
 };
 
 // ---- ffmpeg.wasm loader (LOCAL files — no CDN, no cross-origin issues) ----
+//
+// We deliberately do NOT pass `classWorkerURL`. Why: when classWorkerURL is
+// provided, ffmpeg.js resolves the worker against a hardcoded build-machine
+// base (`file:///home/jeromewu/...`) → browser throws a Security Error.
+// When omitted, it falls back to `publicPath + '814.ffmpeg.js'`, where
+// publicPath is auto-detected from our <script src="lib/ffmpeg.js"> tag.
+// That resolves to the correct same-origin URL with no hardcoding involved.
 async function getFFmpeg(onLog) {
   if (ffmpegReady) return ffmpegInstance;
 
@@ -88,13 +102,16 @@ async function getFFmpeg(onLog) {
 
   setProgress('Starting engine…', 12, 'Loading ffmpeg core from local files');
 
-  // All assets are SAME-ORIGIN (served from /lib). This is the key fix:
-  // the worker spawns same-origin, and importScripts('ffmpeg-core.js') works
-  // because it's not cross-origin. No blobs, no COEP/COOP headers needed.
+  // Resolve to ABSOLUTE URLs (relative to the page, not the worker).
+  // Why absolute: ffmpeg-core.js does `importScripts(coreURL)` from inside
+  // the worker, where relative paths resolve against the WORKER's URL
+  // (lib/814.ffmpeg.js) — so 'lib/ffmpeg-core.js' would become
+  // 'lib/lib/ffmpeg-core.js' (wrong). Absolute URLs avoid that ambiguity.
+  // We don't pass classWorkerURL: when omitted, ffmpeg.js auto-detects
+  // publicPath from our <script src="lib/ffmpeg.js"> tag → correct worker URL.
   await ffmpeg.load({
-    coreURL: 'lib/ffmpeg-core.js',
-    wasmURL: 'lib/ffmpeg-core.wasm',
-    classWorkerURL: 'lib/814.ffmpeg.js',
+    coreURL: new URL('lib/ffmpeg-core.js', document.baseURI).href,
+    wasmURL: new URL('lib/ffmpeg-core.wasm', document.baseURI).href,
   });
 
   ffmpegInstance = ffmpeg;
