@@ -83,16 +83,34 @@ const setProgress = (label, pct, detail = '') => {
   if (detail) progressDetail.textContent = detail;
 };
 
-// ---- ffmpeg.wasm loader (LOCAL files — no CDN, no cross-origin issues) ----
+// ---- ffmpeg.wasm loader (LOCAL multi-threaded core) ----
 //
-// We deliberately do NOT pass `classWorkerURL`. Why: when classWorkerURL is
-// provided, ffmpeg.js resolves the worker against a hardcoded build-machine
-// base (`file:///home/jeromewu/...`) → browser throws a Security Error.
-// When omitted, it falls back to `publicPath + '814.ffmpeg.js'`, where
-// publicPath is auto-detected from our <script src="lib/ffmpeg.js"> tag.
-// That resolves to the correct same-origin URL with no hardcoding involved.
+// Uses @ffmpeg/core-mt (multi-threaded) which spreads encoding across CPU
+// cores via SharedArrayBuffer + pthreads — ~2-4x faster than single-threaded.
+//
+// Requires cross-origin isolation (COOP/COEP headers) for SharedArrayBuffer.
+// On GitHub Pages we get these via coi-serviceworker.js (see index.html),
+// which injects the headers client-side. The catch: the service worker only
+// activates AFTER a one-time page reload, so on the very first load
+// `crossOriginIsolated` is false. We guard against that and tell the user to
+// wait for the reload rather than crashing with a cryptic error.
+//
+// We deliberately do NOT pass `classWorkerURL`: when omitted, ffmpeg.js
+// auto-detects publicPath from our <script src="lib/ffmpeg.js"> tag → correct
+// wrapper-worker URL. Passing it would resolve against a hardcoded build
+// path and throw a Security Error.
 async function getFFmpeg(onLog) {
   if (ffmpegReady) return ffmpegInstance;
+
+  // Multi-threaded core needs SharedArrayBuffer, which needs cross-origin
+  // isolation. On first load (before coi-serviceworker reloads the page)
+  // this is false — bail with a clear message.
+  if (!self.crossOriginIsolated) {
+    throw new Error(
+      'Multi-threading is still activating. The page should reload shortly to ' +
+        'enable it — if it does not, refresh manually and try again.',
+    );
+  }
 
   if (!window.FFmpegWASM || !window.FFmpegUtil) {
     throw new Error('ffmpeg libraries failed to load. Refresh the page.');
@@ -102,18 +120,16 @@ async function getFFmpeg(onLog) {
   const ffmpeg = new FFmpeg();
   ffmpeg.on('log', ({ message }) => onLog?.(message));
 
-  setProgress('Starting engine…', 12, 'Loading ffmpeg core from local files');
+  setProgress('Starting engine…', 12, 'Loading multi-threaded ffmpeg core');
 
   // Resolve to ABSOLUTE URLs (relative to the page, not the worker).
-  // Why absolute: ffmpeg-core.js does `importScripts(coreURL)` from inside
-  // the worker, where relative paths resolve against the WORKER's URL
-  // (lib/814.ffmpeg.js) — so 'lib/ffmpeg-core.js' would become
-  // 'lib/lib/ffmpeg-core.js' (wrong). Absolute URLs avoid that ambiguity.
-  // We don't pass classWorkerURL: when omitted, ffmpeg.js auto-detects
-  // publicPath from our <script src="lib/ffmpeg.js"> tag → correct worker URL.
+  // The core does `importScripts(coreURL)` from inside the worker, where
+  // relative paths resolve against the WORKER's URL — absolute avoids that.
+  // workerURL is the new core-mt pthread worker (ffmpeg-core.worker.js).
   await ffmpeg.load({
     coreURL: new URL('lib/ffmpeg-core.js', document.baseURI).href,
     wasmURL: new URL('lib/ffmpeg-core.wasm', document.baseURI).href,
+    workerURL: new URL('lib/ffmpeg-core.worker.js', document.baseURI).href,
   });
 
   ffmpegInstance = ffmpeg;
@@ -301,6 +317,7 @@ async function compress() {
       ...(filters.length ? ['-vf', filters.join(',')] : []),
       '-c:a', 'aac',       // ← audio preserved, re-encoded to AAC
       '-b:a', audioBitrate,
+      '-threads', '0',     // auto-use all available CPU cores (multi-threaded core)
       '-movflags', '+faststart',
       '-y',
     ];
