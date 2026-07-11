@@ -115,9 +115,6 @@
     </footer>
   </main>
 
-  <!-- coi-serviceworker: injects COOP/COEP headers client-side so SharedArrayBuffer
-       (multi-threaded WASM) works on GitHub Pages. Must load FIRST, before any WASM. -->
-  <script src="coi-serviceworker.js"></script>
   <!-- ffmpeg.wasm: loaded from LOCAL same-origin files to avoid cross-origin worker issues -->
   <script src="lib/ffmpeg.js"></script>
   <script src="lib/util.js"></script>

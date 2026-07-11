@@ -83,17 +83,12 @@ const setProgress = (label, pct, detail = '') => {
   if (detail) progressDetail.textContent = detail;
 };
 
-// ---- ffmpeg.wasm loader (LOCAL multi-threaded core) ----
+// ---- ffmpeg.wasm loader (LOCAL single-threaded core) ----
 //
-// Uses @ffmpeg/core-mt (multi-threaded) which spreads encoding across CPU
-// cores via SharedArrayBuffer + pthreads — ~2-4x faster than single-threaded.
-//
-// Requires cross-origin isolation (COOP/COEP headers) for SharedArrayBuffer.
-// On GitHub Pages we get these via coi-serviceworker.js (see index.html),
-// which injects the headers client-side. The catch: the service worker only
-// activates AFTER a one-time page reload, so on the very first load
-// `crossOriginIsolated` is false. We guard against that and tell the user to
-// wait for the reload rather than crashing with a cryptic error.
+// Uses @ffmpeg/core (single-threaded). Tried the multi-threaded core-mt but
+// it hangs during real encoding in multiple environments (headless Chrome AND
+// on the live site) — the pthread workers deadlock. Single-threaded is slower
+// but rock-solid reliable across all browsers with no special headers needed.
 //
 // We deliberately do NOT pass `classWorkerURL`: when omitted, ffmpeg.js
 // auto-detects publicPath from our <script src="lib/ffmpeg.js"> tag → correct
@@ -101,16 +96,6 @@ const setProgress = (label, pct, detail = '') => {
 // path and throw a Security Error.
 async function getFFmpeg(onLog) {
   if (ffmpegReady) return ffmpegInstance;
-
-  // Multi-threaded core needs SharedArrayBuffer, which needs cross-origin
-  // isolation. On first load (before coi-serviceworker reloads the page)
-  // this is false — bail with a clear message.
-  if (!self.crossOriginIsolated) {
-    throw new Error(
-      'Multi-threading is still activating. The page should reload shortly to ' +
-        'enable it — if it does not, refresh manually and try again.',
-    );
-  }
 
   if (!window.FFmpegWASM || !window.FFmpegUtil) {
     throw new Error('ffmpeg libraries failed to load. Refresh the page.');
@@ -120,16 +105,14 @@ async function getFFmpeg(onLog) {
   const ffmpeg = new FFmpeg();
   ffmpeg.on('log', ({ message }) => onLog?.(message));
 
-  setProgress('Starting engine…', 12, 'Loading multi-threaded ffmpeg core');
+  setProgress('Starting engine…', 12, 'Loading ffmpeg core');
 
   // Resolve to ABSOLUTE URLs (relative to the page, not the worker).
   // The core does `importScripts(coreURL)` from inside the worker, where
   // relative paths resolve against the WORKER's URL — absolute avoids that.
-  // workerURL is the new core-mt pthread worker (ffmpeg-core.worker.js).
   await ffmpeg.load({
     coreURL: new URL('lib/ffmpeg-core.js', document.baseURI).href,
     wasmURL: new URL('lib/ffmpeg-core.wasm', document.baseURI).href,
-    workerURL: new URL('lib/ffmpeg-core.worker.js', document.baseURI).href,
   });
 
   ffmpegInstance = ffmpeg;
@@ -317,7 +300,6 @@ async function compress() {
       ...(filters.length ? ['-vf', filters.join(',')] : []),
       '-c:a', 'aac',       // ← audio preserved, re-encoded to AAC
       '-b:a', audioBitrate,
-      '-threads', '0',     // auto-use all available CPU cores (multi-threaded core)
       '-movflags', '+faststart',
       '-y',
     ];
@@ -397,8 +379,14 @@ async function compress() {
     setProgress('Done', 100, '');
     showResult(currentFile.size, blob.size);
   } catch (err) {
-    console.error(err);
-    alert(`Compression failed: ${err.message || err}\n\nThe video format may be unsupported.`);
+    console.error('Compression error:', err);
+    // Build a safe error message — err may be a string, Error, or something weird
+    // (ffmpeg.wasm sometimes throws non-Error objects).
+    const msg =
+      (err && typeof err === 'object' && (err.message || err.toString?.())) ||
+      (typeof err === 'string' && err) ||
+      'Unknown error';
+    alert(`Compression failed: ${msg}\n\nCheck the browser console (F12) for details. The video format may be unsupported.`);
     resetUI();
   }
 }
