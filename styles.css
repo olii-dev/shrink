@@ -318,6 +318,207 @@ html, body {
 
 .compress-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* QUEUE */
+.queue-section {
+  margin-top: 20px;
+}
+
+.queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.queue-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.queue-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-glow);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+
+.add-more-btn {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.add-more-btn:hover { border-color: var(--accent); background: var(--bg-elev); }
+
+.queue-list {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-item {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  transition: border-color 0.15s;
+}
+
+.queue-item.status-processing { border-color: var(--accent); }
+.queue-item.status-done { border-color: rgba(34, 197, 94, 0.3); }
+.queue-item.status-error { border-color: rgba(239, 68, 68, 0.3); }
+
+.qi-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.status-processing .qi-thumb { background: var(--accent-glow); }
+.status-done .qi-thumb { background: rgba(34, 197, 94, 0.1); }
+.status-error .qi-thumb { background: rgba(239, 68, 68, 0.1); }
+
+.qi-info {
+  min-width: 0; /* allow name to truncate */
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.qi-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qi-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.qi-status {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-height: 16px;
+}
+
+.qi-result { color: var(--success); font-weight: 600; }
+.qi-saved { color: var(--text-dim); font-weight: 400; }
+.qi-error { color: var(--danger); }
+.qi-skipped { color: var(--success); }
+
+.qi-progress-wrap {
+  margin-top: 4px;
+}
+
+.qi-progress-bar {
+  height: 4px;
+  background: var(--bg-elev-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.qi-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent) 0%, #8b5cf6 100%);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.qi-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.qi-remove-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.qi-remove-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+.qi-download-btn {
+  background: var(--success);
+  border: none;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.qi-download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -4px rgba(34, 197, 94, 0.4);
+}
+
+.per-file-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.download-all-btn {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  background: var(--success);
+  color: #fff;
+  border: none;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.download-all-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px -6px rgba(34, 197, 94, 0.4);
+}
+
 /* PROGRESS */
 .progress {
   background: var(--bg-elev);

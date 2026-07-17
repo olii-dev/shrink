@@ -7,3 +7,4 @@ test/*.mp4
 node_modules/
 package-lock.json
 .DS_Store
+test-input2.mp4

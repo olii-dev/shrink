@@ -15,103 +15,80 @@
         <span class="logo-mark" aria-hidden="true">🎬</span>
         <h1>Shrink</h1>
       </div>
-      <p class="tagline">Compress any video to a target size — 100% in your browser, nothing uploaded.</p>
+      <p class="tagline">Compress videos to a target size — 100% in your browser, nothing uploaded. Drop as many as you like.</p>
     </header>
 
-    <!-- STEP 1: pick a file -->
-    <section id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a video file">
-      <input id="fileInput" type="file" accept="video/*" hidden />
+    <!-- STEP 1: pick files -->
+    <section id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose video files">
+      <input id="fileInput" type="file" accept="video/*" multiple hidden />
       <div class="dropzone-inner">
         <div class="drop-icon" aria-hidden="true">⬆️</div>
-        <p class="drop-title">Drop a video here</p>
-        <p class="drop-sub">or <span class="link">browse files</span> · MP4, MOV, WebM, MKV…</p>
+        <p class="drop-title">Drop videos here</p>
+        <p class="drop-sub">or <span class="link">browse files</span> · MP4, MOV, WebM, MKV… · add as many as you want</p>
       </div>
     </section>
 
-    <!-- STEP 2: configure + compress -->
-    <section id="config" class="config hidden" aria-live="polite">
-      <div class="preview">
-        <video id="previewVideo" muted playsinline controls></video>
-        <div class="preview-meta">
-          <div><span class="label">File</span><span id="fileName" class="value">—</span></div>
-          <div><span class="label">Size</span><span id="fileSize" class="value">—</span></div>
-          <div><span class="label">Duration</span><span id="fileDuration" class="value">—</span></div>
-          <div><span class="label">Resolution</span><span id="fileRes" class="value">—</span></div>
-        </div>
+    <!-- STEP 2: queue + settings -->
+    <section id="queueSection" class="queue-section hidden" aria-live="polite">
+      <div class="queue-header">
+        <h2>Queue <span id="queueCount" class="queue-count">0</span></h2>
+        <button id="addMoreBtn" class="add-more-btn" type="button">+ Add more</button>
       </div>
+      <ul id="queueList" class="queue-list"></ul>
 
-      <div class="controls">
-        <div class="control-group">
-          <label for="targetSize">Target size</label>
-          <div class="size-input">
-            <input id="targetSize" type="number" min="1" max="500" value="15" />
-            <span class="unit">MB</span>
+      <div class="config">
+        <div class="controls">
+          <div class="control-group">
+            <label for="targetSize">Target size <span class="per-file-hint">(per file)</span></label>
+            <div class="size-input">
+              <input id="targetSize" type="number" min="1" max="500" value="15" />
+              <span class="unit">MB</span>
+            </div>
+            <div class="presets" id="sizePresets">
+              <button type="button" data-size="8">8 MB</button>
+              <button type="button" data-size="10">10 MB</button>
+              <button type="button" data-size="15" class="active">15 MB</button>
+              <button type="button" data-size="25">25 MB</button>
+            </div>
           </div>
-          <div class="presets" id="sizePresets">
-            <button type="button" data-size="8">8 MB</button>
-            <button type="button" data-size="10">10 MB</button>
-            <button type="button" data-size="15" class="active">15 MB</button>
-            <button type="button" data-size="25">25 MB</button>
+
+          <div class="control-group">
+            <label for="resolution">Max resolution</label>
+            <select id="resolution">
+              <option value="0">Keep original</option>
+              <option value="1080">1080p</option>
+              <option value="720" selected>720p</option>
+              <option value="480">480p</option>
+              <option value="360">360p</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <div id="customResolutionWrap" class="custom-resolution hidden">
+              <input id="customResolution" type="number" min="2" max="4320" value="144" />
+              <span class="unit">p tall</span>
+            </div>
+            <p class="hint">Lower resolution = much smaller files when the target is tight. Min 2p — H.264 can't go lower.</p>
           </div>
+
+          <button id="compressAllBtn" class="compress-btn" type="button">Compress all</button>
         </div>
-
-        <div class="control-group">
-          <label for="resolution">Max resolution</label>
-          <select id="resolution">
-            <option value="0">Keep original</option>
-            <option value="1080">1080p</option>
-            <option value="720" selected>720p</option>
-            <option value="480">480p</option>
-            <option value="360">360p</option>
-            <option value="custom">Custom…</option>
-          </select>
-          <div id="customResolutionWrap" class="custom-resolution hidden">
-            <input id="customResolution" type="number" min="2" max="4320" value="144" />
-            <span class="unit">p tall</span>
-          </div>
-          <p class="hint">Lower resolution = much smaller files when the target is tight. Min 2p — H.264 can't go lower.</p>
-        </div>
-
-        <button id="compressBtn" class="compress-btn" type="button">Compress video</button>
       </div>
     </section>
 
-    <!-- STEP 3: progress + result -->
-    <section id="progress" class="progress hidden" aria-live="polite">
+    <!-- Overall progress (during batch) -->
+    <section id="batchProgress" class="progress hidden" aria-live="polite">
       <div class="progress-head">
-        <span id="progressLabel">Preparing…</span>
-        <span id="progressPct">0%</span>
+        <span id="batchLabel">Compressing…</span>
+        <span id="batchPct">0%</span>
       </div>
-      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-      <p id="progressDetail" class="progress-detail"></p>
+      <div class="progress-bar"><div id="batchFill" class="progress-fill"></div></div>
+      <p id="batchDetail" class="progress-detail"></p>
     </section>
 
-    <section id="result" class="result hidden">
-      <h2>Done! 🎉</h2>
-      <div class="result-grid">
-        <div class="stat">
-          <span class="stat-label">Before</span>
-          <span id="beforeSize" class="stat-value">—</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">After</span>
-          <span id="afterSize" class="stat-value">—</span>
-        </div>
-        <div class="stat highlight">
-          <span class="stat-label">Saved</span>
-          <span id="savedPct" class="stat-value">—</span>
-        </div>
-      </div>
-      <video id="resultVideo" controls playsinline></video>
-      <div class="result-actions">
-        <button id="downloadBtn" class="download-btn" type="button">⬇ Download MP4</button>
-        <button id="resetBtn" class="reset-btn" type="button">Compress another</button>
-      </div>
-    </section>
+    <button id="downloadAllBtn" class="download-all-btn hidden" type="button">⬇ Download all</button>
 
     <footer class="footer">
       <p>Runs entirely on your device! Your video NEVER leaves your browser.</p>
-      <p class="footer-note">MOV/MP4/MKV/WebM supported</p>
+      <p class="footer-note">MOV/MP4/MKV/WebM supported · Files process one at a time (most reliable)</p>
     </footer>
   </main>
 
