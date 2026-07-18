@@ -226,7 +226,6 @@ function renderQueueItem(item) {
   li.className = 'queue-item';
   li.dataset.id = item.id;
   li.innerHTML = `
-    <div class="qi-handle" aria-hidden="true">⠿</div>
     <div class="qi-thumb"><span>🎬</span></div>
     <div class="qi-info">
       <div class="qi-name"></div>
@@ -234,10 +233,13 @@ function renderQueueItem(item) {
       <div class="qi-progress-wrap hidden"><div class="qi-progress-bar"><div class="qi-progress-fill"></div></div></div>
       <div class="qi-status"></div>
       <div class="qi-trim-panel hidden">
-        <div class="qi-trim-thumbs"></div>
-        <div class="qi-trim-slider-wrap">
-          <input type="range" class="qi-trim-start" min="0" max="100" step="0.1" value="0" />
-          <input type="range" class="qi-trim-end" min="0" max="100" step="0.1" value="100" />
+        <div class="qi-trim-filmstrip">
+          <div class="qi-trim-thumbs"></div>
+          <div class="qi-trim-wing trim-wing-left"></div>
+          <div class="qi-trim-wing trim-wing-right"></div>
+          <div class="qi-trim-selection"></div>
+          <div class="qi-trim-handle trim-handle-left" aria-label="Start handle"><span class="trim-handle-grip"></span></div>
+          <div class="qi-trim-handle trim-handle-right" aria-label="End handle"><span class="trim-handle-grip"></span></div>
         </div>
         <div class="qi-trim-readout"></div>
       </div>
@@ -246,10 +248,7 @@ function renderQueueItem(item) {
   `;
   queueList.appendChild(li);
 
-  // Wire drag-to-reorder (only enabled when queued — see updateQueueItemRow)
-  wireDragHandle(li, item);
-
-  // Wire trim sliders
+  // Wire the filmstrip trim handles
   wireTrim(li, item);
 
   updateQueueItemRow(item);
@@ -265,7 +264,6 @@ function updateQueueItemRow(item) {
   const actionsEl = li.querySelector('.qi-actions');
   const progWrap = li.querySelector('.qi-progress-wrap');
   const progFill = li.querySelector('.qi-progress-fill');
-  const handleEl = li.querySelector('.qi-handle');
 
   nameEl.textContent = item.file.name;
 
@@ -284,14 +282,6 @@ function updateQueueItemRow(item) {
   li.className = `queue-item status-${item.status}`;
   statusEl.className = 'qi-status';
   actionsEl.innerHTML = '';
-
-  // Drag handle: only when queued (not during/after processing)
-  handleEl.classList.toggle('hidden', item.status !== 'queued' || isProcessing);
-  if (item.status === 'queued' && !isProcessing) {
-    li.draggable = true;
-  } else {
-    li.draggable = false;
-  }
 
   switch (item.status) {
     case 'queued':
@@ -365,19 +355,10 @@ function toggleTrimPanel(item) {
   const panel = li.querySelector('.qi-trim-panel');
   panel.classList.toggle('hidden', !item.trimOpen);
   if (item.trimOpen) {
-    // Configure slider bounds to the real duration
-    const dur = item.meta?.duration || 0;
-    const startSlider = li.querySelector('.qi-trim-start');
-    const endSlider = li.querySelector('.qi-trim-end');
-    startSlider.min = 0;
-    startSlider.max = dur;
-    startSlider.value = item.trimStart;
-    endSlider.min = 0;
-    endSlider.max = dur;
-    endSlider.value = item.trimEnd;
-    updateTrimReadout(item);
+    updateTrimVisual(item);
     // Lazy-generate thumbnails once
-    if (!panel.querySelector('img') && dur > 0) {
+    const thumbs = li.querySelector('.qi-trim-thumbs');
+    if (!thumbs.querySelector('img') && (item.meta?.duration || 0) > 0) {
       generateThumbnails(item, li).catch((e) => console.warn('thumbnail gen failed', e));
     }
   }
@@ -388,10 +369,27 @@ function updateTrimReadout(item) {
   if (!li) return;
   const readout = li.querySelector('.qi-trim-readout');
   const kept = item.trimEnd - item.trimStart;
-  readout.textContent = `${fmtTime(item.trimStart)} → ${fmtTime(item.trimEnd)} (${fmtTime(kept)} kept of ${fmtTime(item.meta?.duration || 0)})`;
+  readout.textContent = `${fmtTime(item.trimStart)} → ${fmtTime(item.trimEnd)}  ·  ${fmtTime(kept)} kept`;
 }
 
-// Generate 6 evenly-spaced thumbnails from the video for the trim strip
+// Position the selection box, dimmed wings, and edge handles over the filmstrip.
+function updateTrimVisual(item) {
+  const li = queueList.querySelector(`[data-id="${item.id}"]`);
+  if (!li) return;
+  const dur = item.meta?.duration || 1;
+  const startPct = (item.trimStart / dur) * 100;
+  const endPct = (item.trimEnd / dur) * 100;
+  li.querySelector('.trim-wing-left').style.width = `${startPct}%`;
+  li.querySelector('.trim-wing-right').style.width = `${100 - endPct}%`;
+  const sel = li.querySelector('.qi-trim-selection');
+  sel.style.left = `${startPct}%`;
+  sel.style.width = `${endPct - startPct}%`;
+  li.querySelector('.trim-handle-left').style.left = `${startPct}%`;
+  li.querySelector('.trim-handle-right').style.left = `${endPct}%`;
+  updateTrimReadout(item);
+}
+
+// Generate enough thumbnails to fill the filmstrip width
 async function generateThumbnails(item, li) {
   const dur = item.meta?.duration;
   if (!dur) return;
@@ -400,25 +398,30 @@ async function generateThumbnails(item, li) {
   const v = document.createElement('video');
   v.src = url;
   v.muted = true;
-  v.crossOrigin = 'anonymous';
+  v.preload = 'auto';
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  // Thumb dimensions
-  const THUMB_W = 64;
+  const THUMB_W = 80;
   canvas.width = THUMB_W;
-  canvas.height = Math.max(36, Math.round((item.meta.height / item.meta.width) * THUMB_W) || 36);
+  canvas.height = Math.max(45, Math.round((item.meta.height / item.meta.width) * THUMB_W) || 45);
 
-  // Seek to each timestamp and capture
-  const positions = Array.from({ length: 6 }, (_, i) => (dur * (i + 0.5)) / 6);
-  for (const t of positions) {
+  // Wait for the video to be ready to seek
+  await new Promise((res) => {
+    if (v.readyState >= 2) res();
+    else v.addEventListener('loadeddata', res, { once: true });
+  });
+
+  const N = 10;
+  for (let i = 0; i < N; i++) {
+    const t = (dur * (i + 0.5)) / N;
     await new Promise((resolve) => {
       const onSeeked = () => {
         try {
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
           const img = document.createElement('img');
-          img.src = canvas.toDataURL('image/jpeg', 0.6);
+          img.src = canvas.toDataURL('image/jpeg', 0.5);
           thumbsContainer.appendChild(img);
-        } catch { /* tainted canvas etc — skip */ }
+        } catch { /* tainted canvas — skip */ }
         v.removeEventListener('seeked', onSeeked);
         resolve();
       };
@@ -429,106 +432,46 @@ async function generateThumbnails(item, li) {
   URL.revokeObjectURL(url);
 }
 
+// Filmstrip trim: drag the two edge handles to set start/end.
+// Pointer events (mouse + touch) on the handles drive everything.
 function wireTrim(li, item) {
-  const startSlider = li.querySelector('.qi-trim-start');
-  const endSlider = li.querySelector('.qi-trim-end');
+  const strip = li.querySelector('.qi-trim-filmstrip');
+  const leftHandle = li.querySelector('.trim-handle-left');
+  const rightHandle = li.querySelector('.trim-handle-right');
 
-  const onInput = (which) => (e) => {
-    let start = parseFloat(startSlider.value);
-    let end = parseFloat(endSlider.value);
-    // Clamp: keep 0.1s gap between thumbs
-    if (which === 'start' && start > end - 0.1) {
-      start = end - 0.1;
-      startSlider.value = start;
-    }
-    if (which === 'end' && end < start + 0.1) {
-      end = start + 0.1;
-      endSlider.value = end;
-    }
-    item.trimStart = start;
-    item.trimEnd = end;
-    updateTrimReadout(item);
+  const startDrag = (which) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const dur = item.meta?.duration || 0;
+    if (!dur) return;
+
+    const onMove = (ev) => {
+      const rect = strip.getBoundingClientRect();
+      const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+      let t = (x / rect.width) * dur;
+      t = Math.max(0, Math.min(dur, t));
+
+      if (which === 'start') {
+        item.trimStart = Math.min(t, item.trimEnd - 0.1);
+      } else {
+        item.trimEnd = Math.max(t, item.trimStart + 0.1);
+      }
+      updateTrimVisual(item);
+    };
+
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    };
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    // Capture the first move immediately for click-to-position feel
+    onMove(e);
   };
 
-  startSlider.addEventListener('input', onInput('start'));
-  endSlider.addEventListener('input', onInput('end'));
-}
-
-// =========================================================================
-//  DRAG TO REORDER
-// =========================================================================
-
-let draggedId = null;
-
-function wireDragHandle(li, item) {
-  li.addEventListener('dragstart', (e) => {
-    if (item.status !== 'queued' || isProcessing) {
-      e.preventDefault();
-      return;
-    }
-    draggedId = item.id;
-    li.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    // Required for Firefox to start the drag
-    e.dataTransfer.setData('text/plain', String(item.id));
-  });
-
-  li.addEventListener('dragend', () => {
-    li.classList.remove('dragging');
-    draggedId = null;
-    // Clean up any leftover drop indicators
-    queueList.querySelectorAll('.drop-before, .drop-after').forEach((el) => {
-      el.classList.remove('drop-before', 'drop-after');
-    });
-  });
-
-  li.addEventListener('dragover', (e) => {
-    if (draggedId === null || draggedId === item.id) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    // Decide before/after based on mouse Y relative to row midpoint
-    const rect = li.getBoundingClientRect();
-    const after = e.clientY > rect.top + rect.height / 2;
-    li.classList.toggle('drop-before', !after);
-    li.classList.toggle('drop-after', after);
-  });
-
-  li.addEventListener('dragleave', () => {
-    li.classList.remove('drop-before', 'drop-after');
-  });
-
-  li.addEventListener('drop', (e) => {
-    if (draggedId === null || draggedId === item.id) return;
-    e.preventDefault();
-    const rect = li.getBoundingClientRect();
-    const after = e.clientY > rect.top + rect.height / 2;
-    li.classList.remove('drop-before', 'drop-after');
-    reorderQueue(draggedId, item.id, after);
-  });
-}
-
-// Move `fromId` to be before/after `toId` in both the array and the DOM.
-function reorderQueue(fromId, toId, after) {
-  const fromIdx = queue.findIndex((q) => q.id === fromId);
-  const toIdx = queue.findIndex((q) => q.id === toId);
-  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-
-  const [moved] = queue.splice(fromIdx, 1);
-  // Recalculate target index after removal
-  let targetIdx = queue.findIndex((q) => q.id === toId);
-  if (after) targetIdx += 1;
-  queue.splice(targetIdx, 0, moved);
-
-  // Reorder the DOM to match
-  const fromEl = queueList.querySelector(`[data-id="${fromId}"]`);
-  const toEl = queueList.querySelector(`[data-id="${toId}"]`);
-  if (fromEl && toEl) {
-    if (after) {
-      toEl.after(fromEl);
-    } else {
-      toEl.before(fromEl);
-    }
-  }
+  leftHandle.addEventListener('pointerdown', startDrag('start'));
+  rightHandle.addEventListener('pointerdown', startDrag('end'));
 }
 
 function removeFromQueue(id) {
