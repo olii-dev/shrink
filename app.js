@@ -40,11 +40,52 @@ const batchDetail = $('batchDetail');
 const downloadAllBtn = $('downloadAllBtn');
 
 // ---- State ----
-const queue = []; // [{ id, file, meta, status, progress, resultUrl, resultName, resultSize, error }]
+const queue = []; // [{ id, file, meta, status, progress, resultUrl, resultName, resultSize, error, trimStart, trimEnd }]
 let nextId = 1;
 let ffmpegInstance = null;
 let ffmpegReady = false;
 let isProcessing = false;
+
+// ---- Settings persistence (settings only — files can't be persisted) ----
+const SETTINGS_KEY = 'shrink.settings.v1';
+let saveTimer = null;
+
+function saveSettings() {
+  // Debounced so dragging a slider doesn't slam localStorage
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          targetSize: targetSize.value,
+          resolution: resolution.value,
+          customResolution: customResolution.value,
+        }),
+      );
+    } catch { /* private mode / full storage — ignore */ }
+  }, 300);
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (s.targetSize) targetSize.value = s.targetSize;
+    if (s.resolution) {
+      resolution.value = s.resolution;
+      const isCustom = s.resolution === 'custom';
+      customResolutionWrap.classList.toggle('hidden', !isCustom);
+    }
+    if (s.customResolution) customResolution.value = s.customResolution;
+    // Sync preset highlight to restored value
+    sizePresets.querySelectorAll('button').forEach((b) =>
+      b.classList.toggle('active', b.dataset.size === targetSize.value),
+    );
+    return true;
+  } catch { return false; }
+}
 
 // ---- Helpers ----
 const fmtBytes = (b) => {
@@ -159,14 +200,20 @@ async function addFiles(fileList) {
       resultName: null,
       resultSize: 0,
       error: null,
+      trimStart: 0,   // seconds; 0 = start of video
+      trimEnd: null,  // seconds; null = end of video (set after meta loads)
+      trimOpen: false, // trim panel expanded?
     };
     queue.push(item);
     renderQueueItem(item);
     // Read metadata async (don't block — fills in as it arrives)
     try {
       item.meta = await readMeta(file);
+      // Default trim = full video
+      item.trimEnd = item.meta.duration || 0;
     } catch {
       item.meta = { duration: 0, width: 0, height: 0 };
+      item.trimEnd = 0;
     }
     updateQueueItemRow(item);
   }
@@ -179,16 +226,32 @@ function renderQueueItem(item) {
   li.className = 'queue-item';
   li.dataset.id = item.id;
   li.innerHTML = `
+    <div class="qi-handle" aria-hidden="true">⠿</div>
     <div class="qi-thumb"><span>🎬</span></div>
     <div class="qi-info">
       <div class="qi-name"></div>
       <div class="qi-meta"></div>
       <div class="qi-progress-wrap hidden"><div class="qi-progress-bar"><div class="qi-progress-fill"></div></div></div>
       <div class="qi-status"></div>
+      <div class="qi-trim-panel hidden">
+        <div class="qi-trim-thumbs"></div>
+        <div class="qi-trim-slider-wrap">
+          <input type="range" class="qi-trim-start" min="0" max="100" step="0.1" value="0" />
+          <input type="range" class="qi-trim-end" min="0" max="100" step="0.1" value="100" />
+        </div>
+        <div class="qi-trim-readout"></div>
+      </div>
     </div>
     <div class="qi-actions"></div>
   `;
   queueList.appendChild(li);
+
+  // Wire drag-to-reorder (only enabled when queued — see updateQueueItemRow)
+  wireDragHandle(li, item);
+
+  // Wire trim sliders
+  wireTrim(li, item);
+
   updateQueueItemRow(item);
 }
 
@@ -202,6 +265,7 @@ function updateQueueItemRow(item) {
   const actionsEl = li.querySelector('.qi-actions');
   const progWrap = li.querySelector('.qi-progress-wrap');
   const progFill = li.querySelector('.qi-progress-fill');
+  const handleEl = li.querySelector('.qi-handle');
 
   nameEl.textContent = item.file.name;
 
@@ -209,6 +273,11 @@ function updateQueueItemRow(item) {
   const metaParts = [sizeStr];
   if (item.meta?.duration) metaParts.push(fmtTime(item.meta.duration));
   if (item.meta?.width) metaParts.push(`${item.meta.width}×${item.meta.height}`);
+  // Show trim indicator if a non-default trim is set
+  if (hasTrim(item)) {
+    const kept = item.trimEnd - item.trimStart;
+    metaParts.push(`✂ ${fmtTime(item.trimStart)}–${fmtTime(item.trimEnd)} (${fmtTime(kept)} kept)`);
+  }
   metaEl.textContent = metaParts.join(' · ');
 
   // Status + actions by state
@@ -216,10 +285,28 @@ function updateQueueItemRow(item) {
   statusEl.className = 'qi-status';
   actionsEl.innerHTML = '';
 
+  // Drag handle: only when queued (not during/after processing)
+  handleEl.classList.toggle('hidden', item.status !== 'queued' || isProcessing);
+  if (item.status === 'queued' && !isProcessing) {
+    li.draggable = true;
+  } else {
+    li.draggable = false;
+  }
+
   switch (item.status) {
     case 'queued':
       statusEl.textContent = '';
       if (!isProcessing) {
+        // Trim toggle button
+        const trim = document.createElement('button');
+        trim.className = 'qi-trim-btn';
+        trim.type = 'button';
+        trim.textContent = '✂ Trim';
+        trim.title = hasTrim(item) ? 'Edit trim' : 'Trim start/end';
+        if (hasTrim(item)) trim.classList.add('active');
+        trim.onclick = () => toggleTrimPanel(item);
+        actionsEl.appendChild(trim);
+
         const rm = document.createElement('button');
         rm.className = 'qi-remove-btn';
         rm.textContent = '✕';
@@ -262,6 +349,188 @@ function updateQueueItemRow(item) {
   }
 }
 
+// Does this item have a non-default trim applied?
+function hasTrim(item) {
+  return item.meta?.duration > 0 && (item.trimStart > 0.1 || item.trimEnd < item.meta.duration - 0.1);
+}
+
+// =========================================================================
+//  TRIM
+// =========================================================================
+
+function toggleTrimPanel(item) {
+  item.trimOpen = !item.trimOpen;
+  const li = queueList.querySelector(`[data-id="${item.id}"]`);
+  if (!li) return;
+  const panel = li.querySelector('.qi-trim-panel');
+  panel.classList.toggle('hidden', !item.trimOpen);
+  if (item.trimOpen) {
+    // Configure slider bounds to the real duration
+    const dur = item.meta?.duration || 0;
+    const startSlider = li.querySelector('.qi-trim-start');
+    const endSlider = li.querySelector('.qi-trim-end');
+    startSlider.min = 0;
+    startSlider.max = dur;
+    startSlider.value = item.trimStart;
+    endSlider.min = 0;
+    endSlider.max = dur;
+    endSlider.value = item.trimEnd;
+    updateTrimReadout(item);
+    // Lazy-generate thumbnails once
+    if (!panel.querySelector('img') && dur > 0) {
+      generateThumbnails(item, li).catch((e) => console.warn('thumbnail gen failed', e));
+    }
+  }
+}
+
+function updateTrimReadout(item) {
+  const li = queueList.querySelector(`[data-id="${item.id}"]`);
+  if (!li) return;
+  const readout = li.querySelector('.qi-trim-readout');
+  const kept = item.trimEnd - item.trimStart;
+  readout.textContent = `${fmtTime(item.trimStart)} → ${fmtTime(item.trimEnd)} (${fmtTime(kept)} kept of ${fmtTime(item.meta?.duration || 0)})`;
+}
+
+// Generate 6 evenly-spaced thumbnails from the video for the trim strip
+async function generateThumbnails(item, li) {
+  const dur = item.meta?.duration;
+  if (!dur) return;
+  const thumbsContainer = li.querySelector('.qi-trim-thumbs');
+  const url = URL.createObjectURL(item.file);
+  const v = document.createElement('video');
+  v.src = url;
+  v.muted = true;
+  v.crossOrigin = 'anonymous';
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  // Thumb dimensions
+  const THUMB_W = 64;
+  canvas.width = THUMB_W;
+  canvas.height = Math.max(36, Math.round((item.meta.height / item.meta.width) * THUMB_W) || 36);
+
+  // Seek to each timestamp and capture
+  const positions = Array.from({ length: 6 }, (_, i) => (dur * (i + 0.5)) / 6);
+  for (const t of positions) {
+    await new Promise((resolve) => {
+      const onSeeked = () => {
+        try {
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          const img = document.createElement('img');
+          img.src = canvas.toDataURL('image/jpeg', 0.6);
+          thumbsContainer.appendChild(img);
+        } catch { /* tainted canvas etc — skip */ }
+        v.removeEventListener('seeked', onSeeked);
+        resolve();
+      };
+      v.addEventListener('seeked', onSeeked);
+      v.currentTime = Math.min(t, dur - 0.05);
+    });
+  }
+  URL.revokeObjectURL(url);
+}
+
+function wireTrim(li, item) {
+  const startSlider = li.querySelector('.qi-trim-start');
+  const endSlider = li.querySelector('.qi-trim-end');
+
+  const onInput = (which) => (e) => {
+    let start = parseFloat(startSlider.value);
+    let end = parseFloat(endSlider.value);
+    // Clamp: keep 0.1s gap between thumbs
+    if (which === 'start' && start > end - 0.1) {
+      start = end - 0.1;
+      startSlider.value = start;
+    }
+    if (which === 'end' && end < start + 0.1) {
+      end = start + 0.1;
+      endSlider.value = end;
+    }
+    item.trimStart = start;
+    item.trimEnd = end;
+    updateTrimReadout(item);
+  };
+
+  startSlider.addEventListener('input', onInput('start'));
+  endSlider.addEventListener('input', onInput('end'));
+}
+
+// =========================================================================
+//  DRAG TO REORDER
+// =========================================================================
+
+let draggedId = null;
+
+function wireDragHandle(li, item) {
+  li.addEventListener('dragstart', (e) => {
+    if (item.status !== 'queued' || isProcessing) {
+      e.preventDefault();
+      return;
+    }
+    draggedId = item.id;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    // Required for Firefox to start the drag
+    e.dataTransfer.setData('text/plain', String(item.id));
+  });
+
+  li.addEventListener('dragend', () => {
+    li.classList.remove('dragging');
+    draggedId = null;
+    // Clean up any leftover drop indicators
+    queueList.querySelectorAll('.drop-before, .drop-after').forEach((el) => {
+      el.classList.remove('drop-before', 'drop-after');
+    });
+  });
+
+  li.addEventListener('dragover', (e) => {
+    if (draggedId === null || draggedId === item.id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    // Decide before/after based on mouse Y relative to row midpoint
+    const rect = li.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    li.classList.toggle('drop-before', !after);
+    li.classList.toggle('drop-after', after);
+  });
+
+  li.addEventListener('dragleave', () => {
+    li.classList.remove('drop-before', 'drop-after');
+  });
+
+  li.addEventListener('drop', (e) => {
+    if (draggedId === null || draggedId === item.id) return;
+    e.preventDefault();
+    const rect = li.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    li.classList.remove('drop-before', 'drop-after');
+    reorderQueue(draggedId, item.id, after);
+  });
+}
+
+// Move `fromId` to be before/after `toId` in both the array and the DOM.
+function reorderQueue(fromId, toId, after) {
+  const fromIdx = queue.findIndex((q) => q.id === fromId);
+  const toIdx = queue.findIndex((q) => q.id === toId);
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+
+  const [moved] = queue.splice(fromIdx, 1);
+  // Recalculate target index after removal
+  let targetIdx = queue.findIndex((q) => q.id === toId);
+  if (after) targetIdx += 1;
+  queue.splice(targetIdx, 0, moved);
+
+  // Reorder the DOM to match
+  const fromEl = queueList.querySelector(`[data-id="${fromId}"]`);
+  const toEl = queueList.querySelector(`[data-id="${toId}"]`);
+  if (fromEl && toEl) {
+    if (after) {
+      toEl.after(fromEl);
+    } else {
+      toEl.before(fromEl);
+    }
+  }
+}
+
 function removeFromQueue(id) {
   const idx = queue.findIndex((q) => q.id === id);
   if (idx < 0 || isProcessing) return;
@@ -298,25 +567,29 @@ function downloadBlob(url, name) {
 async function compressOne(item, targetMB, maxH, onProgress) {
   const ffmpeg = ffmpegInstance;
 
-  // Fast path: already under target
-  if (item.file.size <= targetMB * 1024 * 1024) {
+  const sourceDuration = item.meta?.duration;
+  const trimmed = hasTrim(item);
+  // Effective duration for bitrate math = the part we're actually keeping
+  const effectiveDuration = trimmed ? (item.trimEnd - item.trimStart) : sourceDuration;
+
+  // Fast path: already under target AND no trim (trim requires re-encoding)
+  if (!trimmed && item.file.size <= targetMB * 1024 * 1024) {
     item.resultUrl = URL.createObjectURL(item.file);
     item.resultName = item.file.name.replace(/\.[^.]+$/, '') + '_shrink.mp4';
     item.resultSize = item.file.size;
     return { skipped: true };
   }
 
-  const duration = item.meta?.duration;
-  if (!duration || !isFinite(duration) || duration <= 0) {
+  if (!effectiveDuration || !isFinite(effectiveDuration) || effectiveDuration <= 0) {
     throw new Error('Could not determine video duration.');
   }
 
-  // Compute target bitrate
+  // Compute target bitrate using the TRIMMED duration
   const targetBytes = targetMB * 1024 * 1024;
   const targetBits = targetBytes * 8 * 0.98;
   const audioBitrate = targetMB >= 10 ? '128k' : '96k';
-  const audioBits = parseInt(audioBitrate, 10) * 1000 * duration;
-  let videoBitrate = Math.floor((targetBits - audioBits) / duration);
+  const audioBits = parseInt(audioBitrate, 10) * 1000 * effectiveDuration;
+  let videoBitrate = Math.floor((targetBits - audioBits) / effectiveDuration);
   if (videoBitrate < 50_000) videoBitrate = 50_000;
   const videoK = Math.max(40, Math.round(videoBitrate / 1000));
 
@@ -330,7 +603,13 @@ async function compressOne(item, targetMB, maxH, onProgress) {
     filters.push(`scale=-2:${maxH}`);
   }
 
+  // -ss/-to go BEFORE -i for fast keyframe seek (much faster than after-input seek)
+  const seekArgs = trimmed
+    ? ['-ss', item.trimStart.toFixed(3), '-to', item.trimEnd.toFixed(3)]
+    : [];
+
   const commonArgs = [
+    ...seekArgs,
     '-i', inName,
     '-c:v', 'libx264',
     '-preset', 'veryfast',
@@ -523,9 +802,11 @@ sizePresets.addEventListener('click', (e) => {
   if (!btn) return;
   targetSize.value = btn.dataset.size;
   sizePresets.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+  saveSettings();
 });
 targetSize.addEventListener('input', () => {
   sizePresets.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.size === targetSize.value));
+  saveSettings();
 });
 
 // Custom resolution
@@ -533,7 +814,9 @@ resolution.addEventListener('change', () => {
   const isCustom = resolution.value === 'custom';
   customResolutionWrap.classList.toggle('hidden', !isCustom);
   if (isCustom) customResolution.focus();
+  saveSettings();
 });
+customResolution.addEventListener('input', saveSettings);
 
 // Compress + download all
 compressAllBtn.addEventListener('click', compressAll);
@@ -545,3 +828,16 @@ downloadAllBtn.addEventListener('click', () => {
     setTimeout(() => downloadBlob(item.resultUrl, item.resultName), i * 300);
   });
 });
+
+// ---- Load saved settings on startup ----
+if (loadSettings()) {
+  showToast('Settings restored from last visit');
+}
+
+function showToast(msg) {
+  const toast = $('toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
